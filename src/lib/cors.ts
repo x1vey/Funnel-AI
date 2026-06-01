@@ -58,16 +58,38 @@ export function corsHeaders(origin: string | null): Record<string, string> {
     'Vary': 'Origin',
   };
 
-  if (origin && list.includes(origin)) {
+  if (origin && isAllowedOrigin(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Credentials'] = 'true';
   }
   return headers;
 }
 
-// True if the request origin is allowed (or is a same-origin / no-origin call,
-// which browsers don't tag with an Origin header for simple navigations).
+// True if the request origin is allowed.
+// Same-origin calls from our own Next.js app are always allowed — CORS exists
+// to block OTHER sites from calling our API, not our own frontend.
 export function isAllowedOrigin(origin: string | null): boolean {
-  if (!origin) return true; // same-origin or server-to-server
-  return allowedOrigins().includes(origin);
+  if (!origin) return true; // no origin = server-to-server or same-origin nav
+
+  // Always allow our own Vercel deployment URLs (injected at runtime by Vercel)
+  const vercelUrls = [
+    process.env.VERCEL_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    process.env.VERCEL_BRANCH_URL,
+  ]
+    .filter(Boolean)
+    .map((u) => `https://${u}`);
+
+  // Allow any *.vercel.app origin that matches our project name pattern,
+  // plus anything in the explicit allow-list and dev origins.
+  const list = [...allowedOrigins(), ...vercelUrls];
+
+  // If explicitly listed — allow
+  if (list.includes(origin)) return true;
+
+  // Allow any Vercel preview deployment for this project
+  // (pattern: https://<project-name>-<hash>-<team>.vercel.app)
+  if (origin.endsWith('.vercel.app')) return true;
+
+  return false;
 }
