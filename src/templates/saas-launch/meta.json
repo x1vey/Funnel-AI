@@ -1,0 +1,9 @@
+{
+  "id": "saas-launch",
+  "name": "SaaS Product Launch",
+  "description": "Landing page + thank you + upgrade offer for a SaaS product launch",
+  "category": "saas",
+  "pages": ["landing", "thank-you", "oto"],
+  "tags": ["software", "startup", "product", "subscription"],
+  "thumbnail": "/templates/saas-launch/thumb.png"
+}

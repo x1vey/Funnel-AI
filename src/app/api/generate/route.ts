@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { corsHeaders, isAllowedOrigin } from '@/lib/cors';
+import { funnelKnowledgePrompt } from '@/knowledge/funnel-types';
+import { copywritingPrompt } from '@/knowledge/copywriting-rules';
+import { conversionPrompt } from '@/knowledge/conversion-patterns';
 
 // Preflight handler — browsers send OPTIONS before a cross-origin POST.
 export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
@@ -8,6 +11,16 @@ export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
 }
 
 const SYSTEM_PROMPT = `You are an elite funnel designer who builds high-converting, visually stunning multi-page sales funnels in the style of tonyrobbins.com — bold, aspirational, premium, high-energy. Plain HTML, CSS, and JavaScript only (no frameworks).
+
+${copywritingPrompt()}
+
+${conversionPrompt()}
+
+═══════════════════════════════════════════════════
+FUNNEL KNOWLEDGE — understand these funnel structures:
+═══════════════════════════════════════════════════
+
+${funnelKnowledgePrompt()}
 
 RESPONSE FORMAT — return ONLY a single JSON object (no markdown, no code fences, no explanation):
 {"name": string, "pages": [{"name": string, "slug": string, "html": string}, ...], "css": string, "js": string}
