@@ -26,9 +26,18 @@ function allowedOrigins(): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Vercel automatically sets VERCEL_PROJECT_PRODUCTION_URL (without protocol).
+  // VERCEL_PROJECT_PRODUCTION_URL — the stable production URL (no protocol).
   const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
   if (prodUrl) fromEnv.push(`https://${prodUrl}`);
+
+  // VERCEL_URL — the unique URL for THIS deployment (preview + production).
+  // Changes every deploy, so we can't hardcode it. Vercel injects it at runtime.
+  const deployUrl = process.env.VERCEL_URL;
+  if (deployUrl) fromEnv.push(`https://${deployUrl}`);
+
+  // VERCEL_BRANCH_URL — stable URL for the branch (e.g. main.funnel-ai.vercel.app).
+  const branchUrl = process.env.VERCEL_BRANCH_URL;
+  if (branchUrl) fromEnv.push(`https://${branchUrl}`);
 
   if (process.env.NODE_ENV !== 'production') {
     return [...new Set([...fromEnv, ...DEV_ORIGINS])];
