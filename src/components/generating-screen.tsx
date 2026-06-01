@@ -64,13 +64,26 @@ export default function GeneratingScreen() {
       }
     }, STEP_DURATION);
 
-    // Kick off API call
+    // Kick off API call — include funnel type + flow pages so the AI knows exactly what to build
     const fetchFunnel = async () => {
       try {
+        const { selectedFunnelType, selectedFunnelName, flowPages } = useUIStore.getState();
+
         const res = await fetch('/api/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt }),
+          body: JSON.stringify({
+            prompt,
+            funnelType: selectedFunnelType,
+            funnelName: selectedFunnelName,
+            pages: flowPages.map((p, i) => ({
+              name: p.name,
+              slug: p.slug,
+              type: p.type,
+              position: i,
+              blocks: p.blocks,
+            })),
+          }),
         });
 
         const data = await res.json() as GeneratedFunnel & { error?: string };

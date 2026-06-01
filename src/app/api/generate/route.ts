@@ -147,7 +147,42 @@ JSON RULES:
 - All newlines in string values MUST be escaped as \\n
 - All double quotes in string values MUST be escaped as \\"
 - The JSON must parse with JSON.parse() in one shot
-- The "pages" array must contain exactly 3 objects: index, thank-you, oto`;
+- The "pages" array must match exactly the pages specified in the user message below
+- Each page object must have the slug specified by the user`;
+
+// Build the user message that tells the AI exactly what to generate
+interface PageSpec {
+  name: string;
+  slug: string;
+  type: string;
+  position: number;
+  blocks?: string[];
+}
+
+function buildUserMessage(prompt: string, funnelType: string | null, funnelName: string | null, pages: PageSpec[]): string {
+  const parts: string[] = [];
+
+  parts.push(`Build a complete sales funnel for: ${prompt}`);
+
+  if (funnelType && funnelName) {
+    parts.push(`\nFunnel type: ${funnelName} (${funnelType})`);
+  }
+
+  if (pages.length > 0) {
+    parts.push(`\nGenerate exactly ${pages.length} pages, in this order:`);
+    pages.forEach((page, i) => {
+      parts.push(`  ${i + 1}. "${page.name}" (slug: "${page.slug}", type: ${page.type})`);
+      if (page.blocks && page.blocks.length > 0) {
+        parts.push(`     Sections to include: ${page.blocks.join(', ')}`);
+      }
+    });
+    parts.push(`\nThe "pages" array in your response MUST contain exactly ${pages.length} objects with these exact slugs.`);
+  } else {
+    parts.push('\nGenerate at least 3 pages: Landing Page (slug: "index"), Thank You (slug: "thank-you"), and One-Time Offer (slug: "oto").');
+  }
+
+  return parts.join('\n');
+}
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const origin = req.headers.get('origin');
@@ -177,6 +212,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!prompt) return NextResponse.json({ error: 'Missing "prompt".' }, { status: 400, headers: cors });
   if (prompt.length > 2000) return NextResponse.json({ error: 'Prompt too long (max 2000 characters).' }, { status: 400, headers: cors });
 
+  // Extract funnel structure from the request (sent by the flow editor)
+  const funnelType = typeof body.funnelType === 'string' ? body.funnelType : null;
+  const funnelName = typeof body.funnelName === 'string' ? body.funnelName : null;
+  const pages = Array.isArray(body.pages) ? (body.pages as PageSpec[]) : [];
+
+  const userMessage = buildUserMessage(prompt, funnelType, funnelName, pages);
+
   const model = (typeof body.model === 'string' && body.model.trim())
     ? body.model.trim()
     : (process.env.OPENAI_MODEL || 'gpt-4o');
@@ -197,7 +239,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: `Build a complete sales funnel for: ${prompt}` },
+          { role: 'user', content: userMessage },
         ],
       }),
     });
