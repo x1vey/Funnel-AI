@@ -17,6 +17,7 @@
 // ============================================================================
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { addCustomDomain, removeCustomDomain } from '@/lib/cloudflare-pages';
 import { randomBytes } from 'crypto';
 
 // GET /api/domains — list user's domains
@@ -100,11 +101,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Optionally: call the Vercel API to add the domain to the project
-  // await addDomainToVercel(cleanDomain);
+  // Add the domain to Cloudflare Pages (if credentials are set)
+  let cfStatus = 'pending';
+  if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) {
+    try {
+      // Fetch the funnel slug to determine the CF Pages project name
+      const { data: funnelData } = await supabase
+        .from('funnels')
+        .select('slug')
+        .eq('id', funnel_id)
+        .single();
+
+      if (funnelData) {
+        const result = await addCustomDomain(funnelData.slug, cleanDomain);
+        cfStatus = result.status;
+        // Update DNS value to point to the CF Pages project
+        await supabase
+          .from('custom_domains')
+          .update({ dns_value: `${funnelData.slug}.pages.dev` })
+          .eq('id', newDomain.id);
+      }
+    } catch (err) {
+      console.error('Failed to add domain to Cloudflare:', err);
+      // Domain is saved in DB — user can retry
+    }
+  }
 
   return NextResponse.json({
     domain: newDomain,
+    cloudflare_status: cfStatus,
     dns_instructions: {
       type: 'CNAME',
       name: cleanDomain,
@@ -124,13 +149,33 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
   const domainId = searchParams.get('id');
   if (!domainId) return NextResponse.json({ error: 'Missing domain id.' }, { status: 400 });
 
+  // Fetch the domain + funnel slug before deleting (need it for CF cleanup)
+  const { data: domainRow } = await supabase
+    .from('custom_domains')
+    .select('domain, funnels(slug)')
+    .eq('id', domainId)
+    .eq('owner_id', user.id)
+    .single();
+
   const { error } = await supabase
     .from('custom_domains')
     .delete()
     .eq('id', domainId)
-    .eq('owner_id', user.id); // RLS enforces this too, but be explicit
+    .eq('owner_id', user.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Remove from Cloudflare Pages if configured
+  if (domainRow && process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) {
+    try {
+      const funnelSlug = (domainRow.funnels as unknown as { slug: string })?.slug;
+      if (funnelSlug) {
+        await removeCustomDomain(funnelSlug, domainRow.domain);
+      }
+    } catch (err) {
+      console.error('Failed to remove domain from Cloudflare:', err);
+    }
+  }
 
   return NextResponse.json({ deleted: true });
 }
