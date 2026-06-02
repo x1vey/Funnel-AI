@@ -9,6 +9,7 @@ import Toolbar from './toolbar';
 import PageTabs from './page-tabs';
 import ChatPanel from './chat-panel';
 import Canvas from './canvas';
+import ElementPanel from './element-panel';
 import LibraryDrawer from './library-drawer';
 import ExportModal from './export-modal';
 
@@ -47,11 +48,14 @@ export default function BuilderLayout() {
 
       {/* Main builder area */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Chat panel */}
-        <ChatPanel />
+        {/* Left: draggable elements / layouts / sections */}
+        <ElementPanel />
 
-        {/* Canvas area */}
+        {/* Center: canvas */}
         <Canvas device={device} />
+
+        {/* Right: AI chat panel */}
+        <ChatPanel />
       </div>
 
       {/* Overlays */}

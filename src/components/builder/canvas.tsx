@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useFunnelStore } from '@/store/funnel-store';
 import { renderNodesToDOM, scopeCSS } from '@/lib/serializer';
+import { getPanelItem } from '@/blocks/elements';
 import ContextBar from './context-bar';
 
 const CANVAS_SCOPE = '.funnel-canvas-root';
@@ -32,6 +33,8 @@ export default function Canvas({ device }: CanvasProps) {
     moveNode,
     findNode,
     findParent,
+    addSection,
+    addElement,
   } = useFunnelStore();
 
   const currentPage = project.pages.find(p => p.id === currentPageId);
@@ -269,6 +272,80 @@ export default function Canvas({ device }: CanvasProps) {
     }
   }, [updateStyle]);
 
+  // ─── Drop new items from the side panel ─────────────────────────────────────
+  const handleDragOver = useCallback((e: DragEvent) => {
+    if (!e.dataTransfer?.types.includes('application/x-funnel-item')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!canvasRef.current) return;
+
+    // We can't read the payload during dragover (browser security), so we use a
+    // global hint set on dragstart to know whether it's a section or element.
+    const kind = (window as unknown as { __pcDragKind?: string }).__pcDragKind;
+
+    if (kind === 'element') {
+      const target = findElementDropTarget(canvasRef.current, e.clientX, e.clientY);
+      highlightDropContainer(canvasRef.current, target?.parentId ?? null);
+      if (target) {
+        updateChildDropIndicator(canvasRef.current, target.parentId, target.index);
+      } else {
+        clearDropIndicators(canvasRef.current);
+      }
+    } else {
+      highlightDropContainer(canvasRef.current, null);
+      updateDropIndicator(canvasRef.current, e.clientY, null);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: DragEvent) => {
+    if (!canvasRef.current) return;
+    // Only clear if leaving the canvas entirely
+    if (!canvasRef.current.contains(e.relatedTarget as Node)) {
+      clearDropIndicators(canvasRef.current);
+      highlightDropContainer(canvasRef.current, null);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: DragEvent) => {
+    const raw = e.dataTransfer?.getData('application/x-funnel-item');
+    if (!raw || !canvasRef.current) return;
+    e.preventDefault();
+
+    const canvas = canvasRef.current;
+    clearDropIndicators(canvas);
+    highlightDropContainer(canvas, null);
+    document.body.classList.remove('pc-panel-dragging');
+
+    let payload: { itemId: string; kind: string };
+    try { payload = JSON.parse(raw); } catch { return; }
+
+    const item = getPanelItem(payload.itemId);
+    if (!item) return;
+    const node = item.make();
+
+    if (payload.kind === 'section') {
+      const idx = findSectionInsertIndex(canvas, e.clientY);
+      const created = addSection(node, idx);
+      setSelectedElement(created.id);
+    } else {
+      // Element drop — find the container under the cursor
+      const target = findElementDropTarget(canvas, e.clientX, e.clientY);
+      if (target) {
+        addElement(target.parentId, node, target.index);
+      } else {
+        // No container under cursor — wrap the element in a fresh blank section
+        const created = addSection({
+          type: 'section',
+          tag: 'section',
+          styles: { padding: '60px 40px', background: '#ffffff' },
+          children: [],
+        });
+        addElement(created.id, node);
+        setSelectedElement(created.id);
+      }
+    }
+  }, [addSection, addElement, setSelectedElement]);
+
   // ─── Attach/detach event listeners ─────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -277,6 +354,9 @@ export default function Canvas({ device }: CanvasProps) {
     canvas.addEventListener('click', handleClick);
     canvas.addEventListener('dblclick', handleDblClick);
     canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('dragover', handleDragOver);
+    canvas.addEventListener('dragleave', handleDragLeave);
+    canvas.addEventListener('drop', handleDrop);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
 
@@ -284,10 +364,13 @@ export default function Canvas({ device }: CanvasProps) {
       canvas.removeEventListener('click', handleClick);
       canvas.removeEventListener('dblclick', handleDblClick);
       canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('dragover', handleDragOver);
+      canvas.removeEventListener('dragleave', handleDragLeave);
+      canvas.removeEventListener('drop', handleDrop);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [handleClick, handleDblClick, handleMouseDown, handleMouseMove, handleMouseUp]);
+  }, [handleClick, handleDblClick, handleMouseDown, handleMouseMove, handleMouseUp, handleDragOver, handleDragLeave, handleDrop]);
 
   // ─── Cleanup style on unmount ───────────────────────────────────────────────
   useEffect(() => {
@@ -344,7 +427,7 @@ export default function Canvas({ device }: CanvasProps) {
               This page is empty
             </h3>
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              Use the "Add Section" button in the toolbar to add content.
+              Drag a section or element from the left panel to start building.
             </p>
           </div>
         )}
@@ -395,4 +478,89 @@ function updateDropIndicator(canvas: HTMLElement, clientY: number, _draggingId: 
 function clearDropIndicators(canvas: HTMLElement | null) {
   if (!canvas) return;
   canvas.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+}
+
+// Containers that can accept dropped elements
+const CONTAINER_TAGS = new Set(['div', 'section', 'header', 'footer', 'main', 'nav', 'aside', 'article', 'ul', 'ol', 'form']);
+
+// Find the best container + insertion index for an element drop at (x, y)
+function findElementDropTarget(canvas: HTMLElement, x: number, y: number): { parentId: string; index: number } | null {
+  const stack = document.elementsFromPoint(x, y);
+  for (const raw of stack) {
+    if (!canvas.contains(raw)) continue;
+    const pc = (raw as HTMLElement).closest('[data-pc-id]') as HTMLElement | null;
+    if (!pc || !canvas.contains(pc)) continue;
+
+    const tag = pc.tagName.toLowerCase();
+    if (CONTAINER_TAGS.has(tag)) {
+      return { parentId: pc.getAttribute('data-pc-id')!, index: childInsertIndex(pc, y) };
+    }
+
+    // Leaf element (h1, p, a…) → drop into its nearest container parent
+    const parent = pc.parentElement?.closest('[data-pc-id]') as HTMLElement | null;
+    if (parent && canvas.contains(parent)) {
+      return { parentId: parent.getAttribute('data-pc-id')!, index: childInsertIndex(parent, y) };
+    }
+  }
+  return null;
+}
+
+// Index among a container's direct [data-pc-id] children, based on cursor Y
+function childInsertIndex(container: HTMLElement, clientY: number): number {
+  const children = Array.from(container.children).filter(
+    c => (c as HTMLElement).hasAttribute('data-pc-id')
+  ) as HTMLElement[];
+  for (let i = 0; i < children.length; i++) {
+    const r = children[i].getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) return i;
+  }
+  return children.length;
+}
+
+// Outline the container an element will drop into
+function highlightDropContainer(canvas: HTMLElement, parentId: string | null) {
+  canvas.querySelectorAll('[data-pc-drop-target]').forEach(el => el.removeAttribute('data-pc-drop-target'));
+  if (!parentId) return;
+  const el = canvas.querySelector(`[data-pc-id="${parentId}"]`);
+  if (el) el.setAttribute('data-pc-drop-target', 'true');
+}
+
+// Insertion line between a container's children
+function updateChildDropIndicator(canvas: HTMLElement, parentId: string, index: number) {
+  clearDropIndicators(canvas);
+  const container = canvas.querySelector(`[data-pc-id="${parentId}"]`) as HTMLElement | null;
+  if (!container) return;
+
+  const children = Array.from(container.children).filter(
+    c => (c as HTMLElement).hasAttribute('data-pc-id')
+  ) as HTMLElement[];
+
+  const canvasRect = canvas.getBoundingClientRect();
+  const ind = document.createElement('div');
+  ind.className = 'drop-indicator';
+  ind.style.position = 'absolute';
+  ind.style.zIndex = '9999';
+  ind.style.height = '3px';
+  ind.style.background = 'var(--accent, #6366f1)';
+  ind.style.borderRadius = '2px';
+
+  if (children.length === 0) {
+    const r = container.getBoundingClientRect();
+    ind.style.left = `${r.left - canvasRect.left + 8}px`;
+    ind.style.width = `${r.width - 16}px`;
+    ind.style.top = `${r.top - canvasRect.top + r.height / 2}px`;
+  } else if (index >= children.length) {
+    const r = children[children.length - 1].getBoundingClientRect();
+    ind.style.left = `${r.left - canvasRect.left}px`;
+    ind.style.width = `${r.width}px`;
+    ind.style.top = `${r.bottom - canvasRect.top}px`;
+  } else {
+    const r = children[index].getBoundingClientRect();
+    ind.style.left = `${r.left - canvasRect.left}px`;
+    ind.style.width = `${r.width}px`;
+    ind.style.top = `${r.top - canvasRect.top - 1}px`;
+  }
+
+  canvas.style.position = 'relative';
+  canvas.appendChild(ind);
 }
